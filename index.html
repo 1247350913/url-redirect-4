@@ -1,0 +1,164 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- <title>Gallery</title> -->
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:0; background:#fafafa; }
+  header { padding:12px 16px; background:#fff; box-shadow:0 1px 0 rgba(0,0,0,.08); display:flex; gap:12px; align-items:center; }
+  header button { padding:8px 12px; border-radius:8px; border:1px solid #ddd; background:#fff; cursor:pointer; }
+  #grid { padding:16px; display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px; }
+  .card { background:#fff; border:1px solid #eee; border-radius:12px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.04); cursor:pointer; }
+  .card img { width:100%; height:160px; object-fit:cover; display:block; }
+  .name { padding:8px 10px; font-size:12px; color:#444; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* Lightbox */
+  #lightbox { position:fixed; inset:0; background:rgba(0,0,0,.9); display:none; align-items:center; justify-content:center; }
+  #lightbox.open { display:flex; }
+  #lightbox img { max-width:90vw; max-height:90vh; }
+  .nav { position:fixed; top:50%; transform:translateY(-50%); font-size:28px; color:#fff; background:rgba(255,255,255,.12); border:0; width:44px; height:44px; border-radius:999px; cursor:pointer; }
+  .nav:hover { background:rgba(255,255,255,.2); }
+  #prev { left:24px; } #next { right:24px; }
+  #close { position:fixed; top:20px; right:20px; font-size:22px; color:#fff; background:rgba(255,255,255,.12); border:0; width:42px; height:42px; border-radius:999px; cursor:pointer; }
+</style>
+
+<header>
+  <strong>Gallery</strong>
+  <span id="hint" style="color:#777;font-size:13px;">Loading…</span>
+  <span style="flex:1"></span>
+  <button id="signin" style="display:none;">Sign in with Google</button>
+</header>
+
+<div id="grid"></div>
+
+<div id="lightbox">
+  <button id="close" title="Close">✕</button>
+  <button class="nav" id="prev" title="Previous">‹</button>
+  <img id="big" alt="">
+  <button class="nav" id="next" title="Next">›</button>
+</div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+  // ====== CONFIG ======
+  const CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID";
+  const FOLDER_ID = "1VmixAtpfvh-VaHEo7VFsIZgnLK87RPB1"; // the Drive folder containing images
+  const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
+  let accessToken = null;
+  let files = [];          // [{id,name,blobUrl}]
+  let idx = 0;
+  let tokenClient;
+
+  const hintEl = document.getElementById('hint');
+  const signinBtn = document.getElementById('signin');
+  const grid = document.getElementById('grid');
+
+  // 1) Try silent token using existing Google session
+  window.onload = () => {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: CLIENT_ID,
+      scope: DRIVE_SCOPE,
+      callback: (resp) => {
+        accessToken = resp.access_token;
+        loadGallery().catch(err => fail(err));
+      }
+    });
+    trySilent();
+  };
+
+  function trySilent() {
+    tokenClient.requestAccessToken({ prompt: "" }); // no UI if already signed in
+    // If it fails, GIS doesn’t throw here; we detect later if nothing loads and show Sign In button.
+    setTimeout(() => { if (!accessToken) showSignIn(); }, 1200);
+  }
+
+  function showSignIn() {
+    hintEl.textContent = "Sign in to view shared images";
+    signinBtn.style.display = 'inline-block';
+    signinBtn.onclick = () => tokenClient.requestAccessToken({ prompt: "consent" });
+  }
+
+  async function loadGallery() {
+    hintEl.textContent = "Loading images…";
+    // 2) List files the user can access in that folder
+    const q = `'${FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false`;
+    const fields = "files(id,name,mimeType),nextPageToken";
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=name&pageSize=1000`;
+
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) throw new Error("Drive list failed: " + (await res.text()));
+    const data = await res.json();
+
+    if (!data.files || !data.files.length) {
+      hintEl.textContent = "No images (or you don’t have access).";
+      return;
+    }
+
+    // 3) Render grid; fetch image blobs lazily
+    hintEl.textContent = "";
+    files = data.files.map(f => ({ id: f.id, name: f.name, blobUrl: null }));
+
+    for (let i = 0; i < files.length; i++) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      const img = document.createElement('img');
+      img.alt = files[i].name;
+      img.src = ""; // will fill once we fetch
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = files[i].name;
+
+      card.appendChild(img);
+      card.appendChild(name);
+      grid.appendChild(card);
+
+      // lazy fetch full image (you can optimize with IntersectionObserver if needed)
+      fetchImageBlobUrl(files[i]).then(url => { img.src = url; });
+      card.onclick = () => openLightbox(i);
+    }
+  }
+
+  async function fetchImageBlobUrl(file) {
+    if (file.blobUrl) return file.blobUrl;
+    const imgRes = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!imgRes.ok) throw new Error("Fetch image failed: " + (await imgRes.text()));
+    const blob = await imgRes.blob();
+    file.blobUrl = URL.createObjectURL(blob);
+    return file.blobUrl;
+  }
+
+  // ====== Lightbox ======
+  const box = document.getElementById('lightbox');
+  const big = document.getElementById('big');
+  document.getElementById('close').onclick = () => box.classList.remove('open');
+  document.getElementById('prev').onclick = () => showIdx(idx - 1);
+  document.getElementById('next').onclick = () => showIdx(idx + 1);
+  document.addEventListener('keydown', e => {
+    if (!box.classList.contains('open')) return;
+    if (e.key === 'Escape') box.classList.remove('open');
+    if (e.key === 'ArrowLeft') showIdx(idx - 1);
+    if (e.key === 'ArrowRight') showIdx(idx + 1);
+  });
+
+  function openLightbox(i) {
+    idx = i;
+    showIdx(idx);
+    box.classList.add('open');
+  }
+
+  async function showIdx(i) {
+    if (i < 0) i = files.length - 1;
+    if (i >= files.length) i = 0;
+    idx = i;
+    big.src = "";
+    const url = await fetchImageBlobUrl(files[idx]);
+    big.src = url;
+  }
+
+  function fail(err) {
+    console.error(err);
+    hintEl.textContent = "Couldn’t load (no access or not signed in).";
+    showSignIn();
+  }
+</script>
