@@ -7,8 +7,9 @@
   header button { padding:8px 12px; border-radius:8px; border:1px solid #ddd; background:#fff; cursor:pointer; }
   #grid { padding:16px; display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px; }
   .card { background:#fff; border:1px solid #eee; border-radius:12px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.04); cursor:pointer; }
-  .card img { width:100%; height:160px; object-fit:cover; display:block; }
+  .card img { width:100%; height:160px; object-fit:cover; display:block; background:#f4f4f4; }
   .name { padding:8px 10px; font-size:12px; color:#444; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
   /* Lightbox */
   #lightbox { position:fixed; inset:0; background:rgba(0,0,0,.9); display:none; align-items:center; justify-content:center; }
   #lightbox.open { display:flex; }
@@ -34,73 +35,119 @@
   <button class="nav" id="next" title="Next">›</button>
 </div>
 
+<!-- Google Identity Services -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
-  // ====== CONFIG ======
-  const CLIENT_ID = "952269671741-94el0o54hqe08rl9floeph3gbonvp12u.apps.googleusercontent.com";
-  const FOLDER_ID = "1VmixAtpfvh-VaHEo7VFsIZgnLK87RPB1";
-  const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+  // ====== Config ======
+  const CLIENT_ID = '952269671741-94el0o54hqe08rl9floeph3gbonvp12u.apps.googleusercontent.com';
+  const SCOPES    = 'openid email profile https://www.googleapis.com/auth/drive.readonly';
+  const FOLDER_ID = '1VmixAtpfvh-VaHEo7VFsIZgnLK87RPB1';
 
-  let accessToken = null;
-  let files = [];          // [{id,name,blobUrl}]
-  let idx = 0;
-  let tokenClient;
+  // ====== State / DOM ======
+  let tokenClient, accessToken = null, files = [], idx = 0;
+  const hintEl   = document.getElementById('hint');
+  const signinBtn= document.getElementById('signin');
+  const grid     = document.getElementById('grid');
 
-  const hintEl = document.getElementById('hint');
-  const signinBtn = document.getElementById('signin');
-  const grid = document.getElementById('grid');
+  const box = document.getElementById('lightbox');
+  const big = document.getElementById('big');
+  document.getElementById('close').onclick = () => box.classList.remove('open');
+  document.getElementById('prev').onclick  = () => showIdx(idx - 1);
+  document.getElementById('next').onclick  = () => showIdx(idx + 1);
+  document.addEventListener('keydown', e => {
+    if (!box.classList.contains('open')) return;
+    if (e.key === 'Escape') box.classList.remove('open');
+    if (e.key === 'ArrowLeft')  showIdx(idx - 1);
+    if (e.key === 'ArrowRight') showIdx(idx + 1);
+  });
 
-  // 1) Try silent token using existing Google session
-  window.onload = () => {
+  // ====== Auth bootstrap ======
+  window.addEventListener('load', () => {
     tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
-      scope: DRIVE_SCOPE,
+      scope: SCOPES,
       callback: (resp) => {
-        accessToken = resp.access_token;
-        loadGallery().catch(err => fail(err));
+        if (resp && resp.access_token) {
+          accessToken = resp.access_token;
+          onAuthed();
+        } else {
+          showSignIn();
+        }
       }
     });
+
+    // Silent check first (no popup, no user gesture needed)
     trySilent();
-  };
+
+    // Click = allowed to open popup
+    signinBtn.addEventListener('click', () => {
+      tokenClient.requestAccessToken({ prompt: 'consent' });
+    });
+  });
 
   function trySilent() {
-    tokenClient.requestAccessToken({ prompt: "" }); // no UI if already signed in
-    // If it fails, GIS doesn’t throw here; we detect later if nothing loads and show Sign In button.
+    tokenClient.callback = (resp) => {
+      if (resp && resp.access_token) {
+        accessToken = resp.access_token;
+        onAuthed();
+      } else {
+        showSignIn();
+      }
+    };
+    tokenClient.requestAccessToken({ prompt: '' });
+    // If nothing happens, reveal Sign in after a moment
     setTimeout(() => { if (!accessToken) showSignIn(); }, 1200);
   }
 
   function showSignIn() {
-    hintEl.textContent = "Sign in to view shared images";
+    hintEl.textContent = 'Sign in to view shared images';
     signinBtn.style.display = 'inline-block';
-    signinBtn.onclick = () => tokenClient.requestAccessToken({ prompt: "consent" });
   }
 
-  async function loadGallery() {
-    hintEl.textContent = "Loading images…";
-    // 2) List files the user can access in that folder
-    const q = `'${FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false`;
-    const fields = "files(id,name,mimeType),nextPageToken";
-    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=name&pageSize=1000`;
+  async function onAuthed() {
+    signinBtn.style.display = 'none';
+    try {
+      await loadGallery();
+    } catch (err) {
+      fail(err);
+    }
+  }
 
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (!res.ok) throw new Error("Drive list failed: " + (await res.text()));
+  // ====== Drive listing & render ======
+  async function loadGallery() {
+    hintEl.textContent = 'Loading images…';
+
+    const q = `'${FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false`;
+    const fields = 'files(id,name,mimeType),nextPageToken';
+    const url = `https://www.googleapis.com/drive/v3/files` +
+      `?q=${encodeURIComponent(q)}` +
+      `&fields=${encodeURIComponent(fields)}` +
+      `&orderBy=name` +
+      `&pageSize=1000` +
+      `&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!res.ok) throw new Error('Drive list failed: ' + (await res.text()));
     const data = await res.json();
 
     if (!data.files || !data.files.length) {
-      hintEl.textContent = "No images (or you don’t have access).";
+      hintEl.textContent = 'No images (or you don’t have access).';
       return;
     }
 
-    // 3) Render grid; fetch image blobs lazily
-    hintEl.textContent = "";
+    hintEl.textContent = '';
     files = data.files.map(f => ({ id: f.id, name: f.name, blobUrl: null }));
 
     for (let i = 0; i < files.length; i++) {
       const card = document.createElement('div');
       card.className = 'card';
+
       const img = document.createElement('img');
       img.alt = files[i].name;
-      img.src = ""; // will fill once we fetch
+      img.src = ''; // will fill after fetch
+
       const name = document.createElement('div');
       name.className = 'name';
       name.textContent = files[i].name;
@@ -109,8 +156,8 @@
       card.appendChild(name);
       grid.appendChild(card);
 
-      // lazy fetch full image (you can optimize with IntersectionObserver if needed)
-      fetchImageBlobUrl(files[i]).then(url => { img.src = url; });
+      // lazy fetch
+      fetchImageBlobUrl(files[i]).then(url => { img.src = url; }).catch(() => {});
       card.onclick = () => openLightbox(i);
     }
   }
@@ -120,25 +167,13 @@
     const imgRes = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
-    if (!imgRes.ok) throw new Error("Fetch image failed: " + (await imgRes.text()));
+    if (!imgRes.ok) throw new Error('Fetch image failed: ' + (await imgRes.text()));
     const blob = await imgRes.blob();
     file.blobUrl = URL.createObjectURL(blob);
     return file.blobUrl;
   }
 
-  // ====== Lightbox ======
-  const box = document.getElementById('lightbox');
-  const big = document.getElementById('big');
-  document.getElementById('close').onclick = () => box.classList.remove('open');
-  document.getElementById('prev').onclick = () => showIdx(idx - 1);
-  document.getElementById('next').onclick = () => showIdx(idx + 1);
-  document.addEventListener('keydown', e => {
-    if (!box.classList.contains('open')) return;
-    if (e.key === 'Escape') box.classList.remove('open');
-    if (e.key === 'ArrowLeft') showIdx(idx - 1);
-    if (e.key === 'ArrowRight') showIdx(idx + 1);
-  });
-
+  // ====== Lightbox helpers ======
   function openLightbox(i) {
     idx = i;
     showIdx(idx);
@@ -146,17 +181,22 @@
   }
 
   async function showIdx(i) {
+    if (!files.length) return;
     if (i < 0) i = files.length - 1;
     if (i >= files.length) i = 0;
     idx = i;
-    big.src = "";
-    const url = await fetchImageBlobUrl(files[idx]);
-    big.src = url;
+    big.src = '';
+    try {
+      const url = await fetchImageBlobUrl(files[idx]);
+      big.src = url;
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   function fail(err) {
     console.error(err);
-    hintEl.textContent = "Couldn’t load (no access or not signed in).";
+    hintEl.textContent = 'Couldn’t load (no access or not signed in).';
     showSignIn();
   }
 </script>
