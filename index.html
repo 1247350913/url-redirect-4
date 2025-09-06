@@ -1,6 +1,5 @@
 <!doctype html>
 <meta charset="utf-8">
-<!-- <title>Gallery</title> -->
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:0; background:#fafafa; }
@@ -21,10 +20,9 @@
 </style>
 
 <header>
-  <strong>Gallery</strong>
   <span id="hint" style="color:#777;font-size:13px;">Loading…</span>
   <span style="flex:1"></span>
-  <button id="signin" style="display:none;">Sign in with Google</button>
+  <button id="signin" style="display:none;">Sign in</button>
 </header>
 
 <div id="grid"></div>
@@ -39,8 +37,8 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
   // ====== CONFIG ======
-  const CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID";
-  const FOLDER_ID = "1VmixAtpfvh-VaHEo7VFsIZgnLK87RPB1"; // the Drive folder containing images
+  const CLIENT_ID = "952269671741-94el0o54hqe08rl9floeph3gbonvp12u.apps.googleusercontent.com";
+  const FOLDER_ID = "1VmixAtpfvh-VaHEo7VFsIZgnLK87RPB1";
   const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
   let accessToken = null;
